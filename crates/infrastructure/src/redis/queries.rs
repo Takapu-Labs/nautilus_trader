@@ -17,7 +17,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use ahash::AHashMap;
 use bytes::Bytes;
-use futures::future::join_all;
+use futures::{StreamExt, future::join_all, stream};
 #[cfg(feature = "defi")]
 use nautilus_common::{cache::CacheSnapshotRef, defi::cache::InstrumentMigration};
 use nautilus_common::{
@@ -1253,15 +1253,15 @@ impl DatabaseQueries {
         trader_key: &str,
         encoding: SerializationEncoding,
     ) -> anyhow::Result<AHashMap<ClientOrderId, OrderAny>> {
-        let mut orders = AHashMap::new();
         let pattern = format!("{trader_key}{REDIS_DELIMITER}{ORDERS}*");
         log::debug!("Loading {pattern}");
 
         let mut con = con.clone();
         let keys = Self::scan_keys(&mut con, pattern).await?;
 
-        let futures: Vec<_> = keys
-            .iter()
+        log::info!("Restoring orders from {} Redis keys", keys.len());
+
+        let orders = stream::iter(keys)
             .map(|key| {
                 let con = con.clone();
                 async move {
@@ -1285,10 +1285,11 @@ impl DatabaseQueries {
                     }
                 }
             })
-            .collect();
-
-        // Insert all Client-Order-Id (key) and Order (value) into the HashMap, filtering out None values.
-        orders.extend(join_all(futures).await.into_iter().flatten());
+            // Limit simultaneous Redis history replies during cold startup.
+            .buffer_unordered(64)
+            .filter_map(std::future::ready)
+            .collect::<AHashMap<_, _>>()
+            .await;
         log::debug!("Loaded {} order(s)", orders.len());
 
         Ok(orders)
