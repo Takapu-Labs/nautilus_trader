@@ -1052,11 +1052,6 @@ impl OrderCore {
     }
 
     fn record_event(&mut self, event: OrderEventAny, has_prior_fill_void: bool) {
-        if self.status.is_closed() {
-            self.pending_commands.clear();
-            self.pending_previous_status = None;
-        }
-
         if has_prior_fill_void {
             // Pending fills contribute in full, a restored correction applies once the fill
             // becomes historical, so the next fill must rebuild rather than reuse this fold.
@@ -1065,6 +1060,12 @@ impl OrderCore {
 
         self.ts_last = event.ts_event();
         self.push_event(event);
+        if self.status.is_closed() {
+            self.pending_commands.clear();
+            self.pending_previous_status = None;
+            // Closed orders may stay cached for the lifetime of the trader.
+            self.events.shrink_to_fit();
+        }
     }
 
     fn denied(&mut self, event: &OrderDenied) {
@@ -6773,6 +6774,7 @@ mod tests {
                 .count(),
             2
         );
+        assert_eq!(order.events.capacity(), order.event_count());
         assert!(order.is_closed());
         assert!(!order.is_open());
     }
