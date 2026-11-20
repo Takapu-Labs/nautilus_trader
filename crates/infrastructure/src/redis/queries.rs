@@ -29,7 +29,7 @@ use nautilus_model::{
     accounts::AccountAny,
     data::{CustomData, DataType, HasTsInit, InstrumentClose},
     enums::CurrencyType,
-    events::{AccountState, OrderEventAny, OrderFilled, PositionSnapshot},
+    events::{OrderEventAny, OrderFilled, PositionSnapshot},
     identifiers::{AccountId, ClientId, ClientOrderId, InstrumentId, PositionId},
     instruments::{InstrumentAny, SyntheticInstrument},
     orders::{Order, OrderAny},
@@ -1596,16 +1596,14 @@ impl DatabaseQueries {
         encoding: SerializationEncoding,
     ) -> anyhow::Result<Option<AccountAny>> {
         let key = format!("{ACCOUNTS}{REDIS_DELIMITER}{account_id}");
-        let result = Self::read(con, trader_key, &key).await?;
-        if result.is_empty() {
+        let mut payloads = Self::read(con, trader_key, &key).await?.into_iter();
+        let Some(first) = payloads.next() else {
             return Ok(None);
+        };
+        let mut account = AccountAny::from_events(&[Self::deserialize_payload(encoding, &first)?])?;
+        for payload in payloads {
+            account.apply(Self::deserialize_payload(encoding, &payload)?)?;
         }
-
-        let events: Vec<AccountState> = result
-            .iter()
-            .map(|payload| Self::deserialize_payload(encoding, payload))
-            .collect::<anyhow::Result<_>>()?;
-        let account = AccountAny::from_events(&events)?;
         Ok(Some(account))
     }
 
